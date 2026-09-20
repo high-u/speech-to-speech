@@ -71,7 +71,7 @@ uv run speech-to-speech local \
   --flue_base_url http://127.0.0.1:5173 \
   --flue_agent_name hf-s2s \
   --tts qwen3 \
-  --qwen3_tts_model_name Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice \
+  --qwen3_tts_model_name Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice \
   --qwen3_tts_device cuda \
   --qwen3_tts_backend torch \
   --qwen3_tts_speaker Ono_anna \
