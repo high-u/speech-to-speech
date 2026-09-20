@@ -125,6 +125,7 @@ asyncio_mode = "auto"
 [tool.uv]
 package = true
 prerelease = "allow"
+constraint-dependencies = ["transformers<5.17"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
