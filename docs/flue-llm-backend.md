@@ -117,3 +117,25 @@ TTSに漢字を含むテキストを渡すと、日本語ではない読み方�
 speech-to-speech側は、受け取ったテキストをnltkの`sent_tokenize`で文に区切り、確定した文が`--stream_batch_sentences`（既定3）個たまった時点でTTSに渡す。この`sent_tokenize`は英語用で、`.` `!` `?`しか文末として扱わず、「。」では区切らない。
 
 日本語の回答は最後まで区切られないため、この送出は一度も発生せず、ターン終了時に全文が一括でTTSへ渡る。`--stream_batch_sentences`を変えても効果はない。
+
+## TTS で kokoro を使う場合
+
+初回のみ、依存と辞書を入れる。
+
+```bash
+cd speech-to-speech
+uv sync --extra kokoro
+uv add "misaki[ja]"
+.venv/bin/python -m unidic download
+```
+
+起動コマンドの`--tts qwen3`と`--qwen3_tts_*`を次に差し替える。
+
+```bash
+  --tts kokoro \
+  --kokoro_device cuda \
+  --kokoro_lang_code j \
+  --kokoro_voice jf_alpha \
+```
+
+日本語の音声は`jf_alpha`、`jf_gongitsune`、`jf_nezumi`、`jf_tebukuro`、`jm_kumo`の5つ。`--kokoro_lang_code`と`--kokoro_voice`の既定は英語なので、両方指定する。
