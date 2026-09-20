@@ -23,6 +23,14 @@ llama-serverのbaseUrl/contextWindow/maxTokensは`agents/flue/.env`の`LLAMA_SER
 
 **このアダプターは`/agents/{agent_name}/{conversationId}`という形のパスに固定で叩きに行く**（`flue_language_model.py`の`_stream_turn`にハードコード）。`createAgentRouter`自体はどこにマウントしてもよい設計だが、`src/app.ts`でのマウント先（`/agents/hf-s2s`）を変えると、`--flue_base_url`/`--flue_agent_name`をどう組み合わせても届かない。
 
+初回のみ、依存をインストールし、`.env`を作る。
+
+```bash
+cd agents/flue
+npm install
+cp .env.example .env
+```
+
 起動する。
 
 ```bash
