@@ -5,12 +5,14 @@
 ### llama-server
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 llama-server \
-  -hf unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL \
-  -c 16384 --spec-type draft-mtp --spec-draft-n-max 3 \
-  -fa on -ngl 99 -ctk q8_0 -ctv q8_0 -np 1 \
-  --alias "assistant-model" --jinja \
-  --chat-template-kwargs '{"enable_thinking": false}' --fit off
+CUDA_VISIBLE_DEVICES=0 \
+llama-server -hf unsloth/gemma-4-26B-A4B-it-qat-GGUF:UD-Q4_K_XL \
+  -c 16384 \
+  --spec-type draft-mtp --spec-draft-n-max 3 \
+  -fa on -ctk q8_0 -ctv q8_0 -np 1 --fit off \
+  --n-cpu-moe 99 \
+  --jinja --chat-template-kwargs '{"enable_thinking": false}' \
+  --alias "assistant-model"
 ```
 
 `--alias`の値が、次で登録するモデルプロバイダの`model_id`になる。
@@ -56,7 +58,7 @@ uv sync
 ```bash
 cd speech-to-speech
 
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=0 \
 PULSE_SOURCE=alsa_input.usb-USB_Microphone_Maono_Fairy_2018_06_26-00.iec958-stereo \
 PULSE_SINK=alsa_output.pci-0000_70_00.1.hdmi-stereo \
 uv run speech-to-speech local \
@@ -90,3 +92,28 @@ uv run speech-to-speech local \
 `true`にすると、LLMの音声再生中だけマイク入力が無効化され、再生が終わると有効に戻る。この間は割り込み（barge-in）ができない。
 
 イヤホンで聞く場合はマイクにLLMの声が回り込まないため、このオプションを付けなくても（`false`のままでも）暴走せず、割り込みも可能なまま使える。
+
+## 注意事項
+
+speech-to-speech側の実装に起因して、次のことが起きる。
+
+### 発話できない文字は削除される
+
+speech-to-speech側は、TTSに渡す前に発話可能な文字のリストでテキストを濾し、リストに無い文字を削除する（`src/speech_to_speech/LLM/utils.py`の`SPEECHABLE_PATTERN`）。全角チルダ`〜`や`℃`はリストに含まれていないため、消える。
+
+```
+80%〜90% → 80%90%
+22℃      → 22
+```
+
+天気予報のように単位や範囲を含む回答では、意味が変わって聞こえる。
+
+### 漢字はひらがなに変換してから渡している
+
+TTSに漢字を含むテキストを渡すと、日本語ではない読み方になる。これを防ぐため、flue側でSSEのテキストをkuromoji（形態素解析）とkuroshiro（かな変換）でひらがなに変換してからspeech-to-speechへ送っている（`agents/flue/src/app.ts`）。
+
+### 音声は全文の生成が終わってから始まる
+
+speech-to-speech側は、受け取ったテキストをnltkの`sent_tokenize`で文に区切り、確定した文が`--stream_batch_sentences`（既定3）個たまった時点でTTSに渡す。この`sent_tokenize`は英語用で、`.` `!` `?`しか文末として扱わず、「。」では区切らない。
+
+日本語の回答は最後まで区切られないため、この送出は一度も発生せず、ターン終了時に全文が一括でTTSへ渡る。`--stream_batch_sentences`を変えても効果はない。

@@ -34,4 +34,5 @@ setProvider(
 export function HfS2s() {
   useModel("llama-server/assistant-model");
   useSandbox(local());
+  return process.env.SYSTEM_PROMPT as string;
 }
