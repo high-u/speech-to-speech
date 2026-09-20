@@ -8,9 +8,20 @@
 CUDA_VISIBLE_DEVICES=0 \
 llama-server -hf unsloth/gemma-4-26B-A4B-it-qat-GGUF:UD-Q4_K_XL \
   -c 16384 \
-  --spec-type draft-mtp --spec-draft-n-max 3 \
+  --spec-type draft-mtp --spec-draft-n-max 1 \
   -fa on -ctk q8_0 -ctv q8_0 -np 1 --fit off \
   --n-cpu-moe 99 \
+  --jinja --chat-template-kwargs '{"enable_thinking": false}' \
+  --alias "assistant-model"
+```
+
+```bash
+CUDA_VISIBLE_DEVICES=0 \
+llama-server -hf unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL \
+  -c 16384 \
+  --spec-type draft-mtp --spec-draft-n-max 1 \
+  -fa on -ctk q8_0 -ctv q8_0 -np 1 --fit off \
+  -ngl 99 \
   --jinja --chat-template-kwargs '{"enable_thinking": false}' \
   --alias "assistant-model"
 ```
