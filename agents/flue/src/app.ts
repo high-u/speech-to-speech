@@ -13,15 +13,21 @@ const KuromojiAnalyzer =
 
 const app = new Hono();
 
-const kuroshiroReady: Promise<InstanceType<typeof Kuroshiro>> = (async () => {
-  const kuroshiro = new Kuroshiro();
-  await kuroshiro.init(new KuromojiAnalyzer());
-  return kuroshiro;
-})();
+// "0" turns the conversion off; any other value, including an unset variable,
+// leaves it on.
+const hiraganaEnabled = process.env.HIRAGANA_CONVERSION !== "0";
+
+const kuroshiroReady: Promise<InstanceType<typeof Kuroshiro>> | null = hiraganaEnabled
+  ? (async () => {
+      const kuroshiro = new Kuroshiro();
+      await kuroshiro.init(new KuromojiAnalyzer());
+      return kuroshiro;
+    })()
+  : null;
 // Init starts at module load, long before the first request awaits it. Without a
 // handler attached here, a failure there is an unhandled rejection that takes the
 // process down; awaiting callers still see it and fall back to the raw text.
-kuroshiroReady.catch(() => {});
+kuroshiroReady?.catch(() => {});
 
 
 interface TextDeltaEvent {
@@ -39,6 +45,7 @@ function isTextDelta(event: unknown): event is TextDeltaEvent {
 async function toSpeechText(text: string): Promise<string> {
   try {
     const kuroshiro = await kuroshiroReady;
+    if (!kuroshiro) return text;
     return await kuroshiro.convert(text, { to: "hiragana" });
   } catch (error) {
     console.error("[speech-text] conversion failed, sending the text unconverted:", error);
@@ -126,12 +133,16 @@ function createSpeechTextStream(): TransformStream<Uint8Array, Uint8Array> {
   });
 }
 
-app.use("/agents/hf-s2s/*", async (c, next) => {
-  await next();
-  if (!c.res.body) return;
-  if (!c.res.headers.get("content-type")?.startsWith("text/event-stream")) return;
-  c.res = new Response(c.res.body.pipeThrough(createSpeechTextStream()), c.res);
-});
+// With the conversion off, the stream is left alone entirely: flue's frames
+// reach speech-to-speech exactly as they were sent.
+if (hiraganaEnabled) {
+  app.use("/agents/hf-s2s/*", async (c, next) => {
+    await next();
+    if (!c.res.body) return;
+    if (!c.res.headers.get("content-type")?.startsWith("text/event-stream")) return;
+    c.res = new Response(c.res.body.pipeThrough(createSpeechTextStream()), c.res);
+  });
+}
 
 app.route("/agents/hf-s2s", createAgentRouter(HfS2s));
 
