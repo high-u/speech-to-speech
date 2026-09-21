@@ -9,8 +9,12 @@ uv sync
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 \
-llama-server -hf google/gemma-4-E4B-it-qat-q4_0-gguf \
-  -c 32768 -ngl 99 -fa on -cb -np 1 --temp 1.0 --top-p 0.95 --top-k 64
+llama-server -hf unsloth/gemma-4-E4B-it-qat-GGUF:UD-Q4_K_XL \
+  -c 16384 \
+  -fa on -ctk q8_0 -ctv q8_0 -np 1 --fit off \
+  -ngl 99 \
+  --jinja --chat-template-kwargs '{"enable_thinking": false}' \
+  --alias "assistant-model"
 ```
 
 ```bash

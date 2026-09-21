@@ -124,7 +124,8 @@ speech-to-speech側は、TTSに渡す前に発話可能な文字のリストで�
 
 ### 漢字はひらがなに変換してから渡している
 
-TTSに漢字を含むテキストを渡すと、日本語ではない読み方になる。これを防ぐため、flue側でSSEのテキストをkuromoji（形態素解析）とkuroshiro（かな変換）でひらがなに変換してからspeech-to-speechへ送っている（`agents/flue/src/app.ts`）。
+漢字の読み方の間違いが多いので、flue側でSSEのテキストをkuromoji（形態素解析）とkuroshiro（かな変換）で平仮名に変換してからspeech-to-speechへ送っている（オプションで ON/OFF 可）。
+それでも、間違えるが、TTS のモデル任せよりは、良い感じに思う。
 
 ### 音声は全文の生成が終わってから始まる
 
