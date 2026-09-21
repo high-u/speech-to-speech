@@ -81,6 +81,7 @@ uv run speech-to-speech local \
   --llm_backend flue \
   --flue_base_url http://127.0.0.1:5173 \
   --flue_agent_name hf-s2s \
+  --flue_session_gap_hours 4 \
   --tts qwen3 \
   --qwen3_tts_model_name Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice \
   --qwen3_tts_device cuda \
@@ -90,6 +91,8 @@ uv run speech-to-speech local \
   --local_audio_output_device 18 \
   --local_audio_block_mic_during_playback true
 ```
+
+`--flue_session_gap_hours 4`は、前回の発話から4時間以上経つと新しい会話として扱う設定。既定は`0`（毎回新規の会話）。
 
 （`PULSE_SOURCE`/`PULSE_SINK`やデバイス番号は機材固有の値。自分の環境での調べ方は[local-hardware-setup.md](./local-hardware-setup.md)参照）
 

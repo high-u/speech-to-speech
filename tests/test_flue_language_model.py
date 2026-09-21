@@ -1,7 +1,6 @@
 import json
 import queue
 import threading
-from datetime import datetime, timezone
 
 import httpx
 import pytest
@@ -16,7 +15,6 @@ from speech_to_speech.LLM.base_openai_compatible_language_model import Assistant
 from speech_to_speech.LLM.chat import Chat, make_user_message
 from speech_to_speech.LLM.flue_language_model import (
     FlueModelHandler,
-    conversation_id_for,
     parse_flue_sse_events,
     settlement_from_snapshot,
 )
@@ -26,12 +24,25 @@ def _sse(*batches):
     return "".join(f"event: data\ndata:{json.dumps(batch)}\n\n" for batch in batches)
 
 
-def _make_handler(transport):
+def _freeze_time(monkeypatch, value):
+    """Pin flue_mod's time.time() to *value* until reassigned or monkeypatch undoes it.
+
+    Reassigning per call (rather than handing out a fixed-length iterator of
+    upcoming values) means an incidental extra time.time() call elsewhere during a
+    test can't exhaust the sequence and fail with StopIteration.
+    """
+    monkeypatch.setattr(flue_mod.time, "time", lambda: value)
+
+
+def _make_handler(transport, session_gap_hours=0.0):
     handler = object.__new__(FlueModelHandler)
     handler.flue_url = "http://flue"
     handler.agent_name = "flue-voice"
     handler.request_timeout_s = 300.0
     handler.http = httpx.Client(base_url=handler.flue_url, transport=transport)
+    handler._session_gap_s = session_gap_hours * 3600
+    handler._conversation_id = None
+    handler._last_turn_at = None
     return handler
 
 
@@ -212,13 +223,79 @@ def test_cleanup_closes_the_http_client():
     assert handler.http.is_closed
 
 
-def test_conversation_id_for_uses_the_jst_calendar_day():
-    # 2026-09-18T15:00:00Z is exactly 2026-09-19T00:00 JST: the rollover instant.
-    before_midnight = datetime(2026, 9, 18, 14, 59, 59, tzinfo=timezone.utc)
-    at_midnight = datetime(2026, 9, 18, 15, 0, 0, tzinfo=timezone.utc)
+def test_setup_wires_session_gap_hours_into_seconds():
+    # _make_handler (used by the tests below) bypasses setup() and has the test
+    # itself recompute session_gap_hours * 3600, so it can't catch setup() doing
+    # that conversion wrong (or under a different attribute name). Going through
+    # the real setup() path here closes that gap.
+    handler = _make_real_handler(httpx.MockTransport(lambda request: httpx.Response(500)), session_gap_hours=2.0)
 
-    assert conversation_id_for(before_midnight) == "session20260918"
-    assert conversation_id_for(at_midnight) == "session20260919"
+    assert handler._session_gap_s == 2.0 * 3600
+
+
+def test_current_conversation_id_mints_a_new_id_on_the_first_call(monkeypatch):
+    handler = _make_handler(httpx.MockTransport(lambda request: httpx.Response(500)), session_gap_hours=1.0)
+    _freeze_time(monkeypatch, 1_000.0)
+
+    assert handler._conversation_id is None
+    conversation_id = handler._current_conversation_id()
+    assert conversation_id
+    assert handler._conversation_id == conversation_id
+    # Without this, a second turn arriving before any further time.time() call
+    # would subtract from a still-None _last_turn_at and raise TypeError instead
+    # of correctly reusing the id.
+    assert handler._last_turn_at == 1_000.0
+
+
+def test_current_conversation_id_reuses_the_id_within_the_gap(monkeypatch):
+    handler = _make_handler(httpx.MockTransport(lambda request: httpx.Response(500)), session_gap_hours=1.0)
+
+    _freeze_time(monkeypatch, 1_000.0)
+    first_id = handler._current_conversation_id()
+    _freeze_time(monkeypatch, 1_000.0 + 3599)
+    second_id = handler._current_conversation_id()
+
+    assert first_id == second_id
+    assert handler._last_turn_at == 1_000.0 + 3599
+
+
+def test_current_conversation_id_mints_a_new_id_once_the_gap_elapses(monkeypatch):
+    handler = _make_handler(httpx.MockTransport(lambda request: httpx.Response(500)), session_gap_hours=1.0)
+
+    _freeze_time(monkeypatch, 1_000.0)
+    first_id = handler._current_conversation_id()
+    _freeze_time(monkeypatch, 1_000.0 + 3600)
+    second_id = handler._current_conversation_id()
+
+    assert first_id != second_id
+
+
+def test_current_conversation_id_gap_is_measured_from_the_most_recent_turn_not_session_start(monkeypatch):
+    # Sliding window, not a fixed window from when the current id was minted: each
+    # gap below (3599s) stays under the 1h threshold measured from the *previous*
+    # turn, even though the third turn is 7198s after the first. A regression to a
+    # fixed window (measuring from the first turn instead of the last) would mint a
+    # new id on the third call, since 7198s from turn 1 exceeds the threshold.
+    handler = _make_handler(httpx.MockTransport(lambda request: httpx.Response(500)), session_gap_hours=1.0)
+
+    _freeze_time(monkeypatch, 0.0)
+    first_id = handler._current_conversation_id()
+    _freeze_time(monkeypatch, 3599.0)
+    second_id = handler._current_conversation_id()
+    _freeze_time(monkeypatch, 7198.0)
+    third_id = handler._current_conversation_id()
+
+    assert first_id == second_id == third_id
+
+
+def test_current_conversation_id_mints_a_new_id_every_call_when_the_gap_is_zero(monkeypatch):
+    handler = _make_handler(httpx.MockTransport(lambda request: httpx.Response(500)), session_gap_hours=0.0)
+    _freeze_time(monkeypatch, 1_000.0)
+
+    first_id = handler._current_conversation_id()
+    second_id = handler._current_conversation_id()
+
+    assert first_id != second_id
 
 
 def test_parse_flue_sse_events_reads_complete_data_frames_only():
@@ -861,30 +938,21 @@ def test_stream_turn_raises_and_aborts_when_the_stream_get_fails():
     assert any(method == "POST" and path.endswith("/abort") for method, path in calls)
 
 
-def test_request_posts_to_the_jst_conversation_id_and_streams_its_events(monkeypatch):
-    # _request derives the conversation id from the real wall clock. Freezing it
-    # (rather than computing the expected id from a second, separate
-    # datetime.now() call at the test's own start) avoids a real, if rare, flake:
-    # the two reads racing across a JST midnight rollover.
-    fixed_now = datetime(2026, 9, 19, 3, 0, 0, tzinfo=timezone.utc)
-
-    class _FixedDatetime(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return fixed_now.astimezone(tz) if tz else fixed_now
-
-    monkeypatch.setattr(flue_mod, "datetime", _FixedDatetime)
-    today_id = conversation_id_for(fixed_now)
-    expected_path = f"/agents/flue-voice/{today_id}"
+def test_request_posts_to_the_current_conversation_id_and_streams_its_events():
+    # _request derives the conversation id from _current_conversation_id() (a fresh
+    # uuid4, since _make_handler's default session_gap_hours=0.0 mints a new one
+    # every call), so the expected path isn't known up front; the POST and GET
+    # calls sharing one path (and that path starting with the agent's mount
+    # segment) is what this asserts instead.
     calls = []
 
     def respond(request):
         calls.append((request.method, request.url.path))
         if request.method == "POST":
-            assert request.url.path == expected_path
+            assert request.url.path.startswith("/agents/flue-voice/")
             assert json.loads(request.content) == {"kind": "user", "body": "こんにちは"}
             return httpx.Response(200, json={"offset": "OFFSET_1", "submissionId": "sub_1", "uid": "inst_1"})
-        assert request.url.path == expected_path
+        assert request.url.path == calls[0][1]
         assert request.url.params["offset"] == "OFFSET_1"
         assert request.url.params["live"] == "sse"
         return httpx.Response(
@@ -902,4 +970,5 @@ def test_request_posts_to_the_jst_conversation_id_and_streams_its_events(monkeyp
     events = list(handler._request("こんにちは", {}))
 
     assert {"type": "message-delta", "kind": "text", "messageId": "m1", "delta": "はい"} in events
-    assert calls == [("POST", expected_path), ("GET", expected_path)]
+    assert [method for method, _ in calls] == ["POST", "GET"]
+    assert calls[0][1] == calls[1][1]

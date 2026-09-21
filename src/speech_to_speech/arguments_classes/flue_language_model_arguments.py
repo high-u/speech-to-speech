@@ -13,9 +13,9 @@ class FlueLanguageModelHandlerArguments(LanguageModelBaseArguments):
     ``--init_chat_prompt``) and ``--model_name`` are not sent to it.
 
     flue has no session-listing API, so there is nothing to ask "what was the most
-    recent session for this agent". The conversation id is derived from the current
-    JST calendar date instead (``session20260919``): one conversation per day, with
-    no local or remote state to track. There is no idle-hours option to configure.
+    recent session for this agent". The conversation id is a random uuid4, minted
+    the first time this handler is used and again whenever at least
+    ``--flue_session_gap_hours`` has passed since the previous turn.
     """
 
     flue_base_url: Optional[str] = field(
@@ -45,4 +45,11 @@ class FlueLanguageModelHandlerArguments(LanguageModelBaseArguments):
     compact_history: bool = field(
         default=False,
         metadata={"help": "Not supported by the flue backend: the agent server owns the history."},
+    )
+    flue_session_gap_hours: float = field(
+        default=0.0,
+        metadata={
+            "help": "Hours of silence since the last turn after which a new conversation id is minted. "
+            "0 (default) starts a new conversation on every turn."
+        },
     )

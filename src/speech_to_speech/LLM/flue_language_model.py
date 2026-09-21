@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import time
+import uuid
 from collections.abc import Iterable, Iterator
-from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import httpx
@@ -37,16 +37,6 @@ DEFAULT_REQUEST_TIMEOUT_S = 300.0
 # Best-effort and short on purpose: this fires during cleanup for a turn we're
 # already giving up on, and must never make that cleanup itself slow.
 ABORT_TIMEOUT_S = 3.0
-
-# flue has no session-listing API (nothing to ask "what was the most recent
-# session"), so the conversation id is derived from the wall clock instead of
-# looked up: one conversation per JST calendar day, no state to track.
-JST = timezone(timedelta(hours=9))
-
-
-def conversation_id_for(now: datetime) -> str:
-    """Return the JST-calendar-day conversation id for *now*."""
-    return f"session{now.astimezone(JST):%Y%m%d}"
 
 
 def parse_flue_sse_events(lines: Iterable[str]) -> Iterator[dict[str, Any]]:
@@ -111,8 +101,12 @@ class FlueModelHandler(BaseOpenAICompatibleHandler):
         self,
         *args: Any,
         agent_name: Optional[str] = None,
+        session_gap_hours: float = 0.0,
         **kwargs: Any,
     ) -> None:
+        self._session_gap_s = session_gap_hours * 3600
+        self._conversation_id: Optional[str] = None
+        self._last_turn_at: Optional[float] = None
         base_url = kwargs.get("base_url")
         # setdefault (not get): the same value must also reach super().setup()
         # below, which is what actually sets self.request_timeout_s — otherwise
@@ -168,6 +162,20 @@ class FlueModelHandler(BaseOpenAICompatibleHandler):
     def _build_optional_kwargs(self, req_tools: Any, req_tool_choice: Any) -> dict[str, Any]:
         return {}
 
+    def _current_conversation_id(self) -> str:
+        """Return the conversation id for this turn, minting a new one if idle too long.
+
+        A new id is minted on the first turn, and again whenever at least
+        ``self._session_gap_s`` has passed since the previous turn (0 means every
+        turn). ``self._last_turn_at`` always advances to "now" so the gap is measured
+        from the most recent turn, not from when the current conversation id started.
+        """
+        now = time.time()
+        if self._conversation_id is None or now - self._last_turn_at >= self._session_gap_s:
+            self._conversation_id = str(uuid.uuid4())
+        self._last_turn_at = now
+        return self._conversation_id
+
     def _request(self, api_input: Any, optional_kwargs: dict[str, Any]) -> Iterator[dict[str, Any]]:
         # A plain generator, unlike the openai.Stream other backends return here,
         # cannot be closed safely from a different thread while it is actively
@@ -177,7 +185,7 @@ class FlueModelHandler(BaseOpenAICompatibleHandler):
         # _iter_stream_events never yields a ToolCall, so the prefetch trigger
         # (a completed tool call) can never fire. If this backend ever gains tool
         # support, that assumption stops holding and this needs revisiting.
-        return self._stream_turn(conversation_id_for(datetime.now(JST)), api_input)
+        return self._stream_turn(self._current_conversation_id(), api_input)
 
     def _iter_stream_events(self, api_response: Iterator[dict[str, Any]]) -> Iterator[ProviderEvent]:
         # _stream_turn locks onto one message id at a time, but can still switch
